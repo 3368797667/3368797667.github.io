@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>联机跳棋</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            background-color: #f0f0f0;
+        }
+        #game-container {
+            margin-top: 20px;
+        }
+        #turn-indicator {
+            font-size: 24px;
+            margin-bottom: 10px;
+            padding: 10px;
+            background: #fff;
+            border-radius: 5px;
+        }
+        .board {
+            display: grid;
+            grid-template-columns: repeat(8, 60px);
+            gap: 0;
+            background: #deb887;
+            padding: 10px;
+            border-radius: 10px;
+            box-shadow: 0 0 10px rgba(0,0,0,0.5);
+        }
+        .cell {
+            width: 60px;
+            height: 60px;
+            position: relative;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        .cell:nth-child(odd) {
+            background: rgba(0, 0, 0, 0.1);
+        }
+        .piece {
+            width: 45px;
+            height: 45px;
+            border-radius: 50%;
+            position: absolute;
+            cursor: pointer;
+            transition: transform 0.2s;
+            border: 2px solid transparent;
+        }
+        .piece.red {
+            background: #ff4444;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+        }
+        .piece.blue {
+            background: #4444ff;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+        }
+        .piece.selected {
+            border-color: gold;
+            transform: scale(1.1);
+        }
+        .highlight {
+            background-color: rgba(255, 255, 0, 0.3) !important;
+        }
+        #status {
+            margin-top: 20px;
+            padding: 10px;
+            background: white;
+            border-radius: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div id="login">
+        <input type="text" id="roomId" placeholder="输入房间号">
+        <button onclick="joinRoom()">加入房间</button>
+    </div>
+    
+    <div id="game-container" style="display: none;">
+        <div id="turn-indicator"></div>
+        <div class="board" id="board"></div>
+        <div id="status"></div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <script>
+        const socket = io();
+        let currentColor = null;
+        let currentPlayer = null;
+        let selectedPiece = null;
+
+        // 初始化棋盘
+        function initBoard(boardData) {
+            const container = document.getElementById('board');
+            container.innerHTML = '';
+            
+            for(let i = 0; i < 8; i++) {
+                for(let j = 0; j < 8; j++) {
+                    const cell = document.createElement('div');
+                    cell.className = 'cell';
+                    cell.dataset.x = i;
+                    cell.dataset.y = j;
+                    
+                    if((i + j) % 2 === 0) {
+                        cell.style.backgroundColor = '#f0d9b5';
+                    } else {
+                        cell.style.backgroundColor = '#b58863';
+                    }
+
+                    const pieceValue = boardData[i][j];
+                    if(pieceValue !== 0) {
+                        const piece = createPieceElement(i, j, pieceValue);
+                        cell.appendChild(piece);
+                    }
+                    
+                    cell.addEventListener('click', handleCellClick);
+                    container.appendChild(cell);
+                }
+            }
+        }
+
+        function createPieceElement(x, y, value) {
+            const piece = document.createElement('div');
+            piece.className = `piece ${value === 1 ? 'red' : 'blue'}`;
+            piece.dataset.x = x;
+            piece.dataset.y = y;
+            return piece;
+        }
+
+        function handleCellClick(e) {
+            if(currentColor !== currentPlayer) return;
+
+            const x = parseInt(e.target.dataset.x);
+            const y = parseInt(e.target.dataset.y);
+            const cell = e.target;
+
+            // 清除之前的选择和高亮
+            document.querySelectorAll('.selected').forEach(el => el.classList.remove('selected'));
+            document.querySelectorAll('.highlight').forEach(el => el.classList.remove('highlight'));
+
+            if(selectedPiece) {
+                // 发送移动请求
+                socket.emit('move', {
+                    room: document.getElementById('roomId').value,
+                    from: selectedPiece,
+                    to: [x, y],
+                    player: currentColor
+                });
+                selectedPiece = null;
+            } else {
+                // 请求可能的移动位置
+                socket.emit('get_moves', {
+                    room: document.getElementById('roomId').value,
+                    from: [x, y],
+                    player: currentColor
+                });
+                selectedPiece = [x, y];
+                cell.classList.add('selected');
+            }
+        }
+
+        function joinRoom() {
+            const roomId = document.getElementById('roomId').value;
+            document.getElementById('login').style.display = 'none';
+            document.getElementById('game-container').style.display = 'block';
+            socket.emit('join', { room: roomId });
+        }
+
+        // Socket事件处理
+        socket.on('assign_color', (data) => {
+            currentColor = data.color;
+            document.getElementById('status').textContent = `你当前是 ${currentColor === 0 ? '红方' : '蓝方'}`;
+        });
+
+        socket.on('game_start', (data) => {
+            initBoard(data.board);
+            currentPlayer = data.current_player;
+            updateTurnIndicator();
+        });
+
+        socket.on('update_board', (data) => {
+            initBoard(data.board);
+            currentPlayer = data.current_player;
+            updateTurnIndicator();
+        });
+
+        socket.on('highlight_moves', (moves) => {
+            document.querySelectorAll('.cell').forEach(cell => {
+                const x = parseInt(cell.dataset.x);
+                const y = parseInt(cell.dataset.y);
+                cell.classList.toggle('highlight', 
+                    moves.some(pos => pos[0] === x && pos[1] === y))
+            });
+        });
+
+        socket.on('game_over', (data) => {
+            alert(`游戏结束！胜利者: ${data.winner === 0 ? '红方' : '蓝方'}`);
+            location.reload();
+        });
+
+        function updateTurnIndicator() {
+            const indicator = document.getElementById('turn-indicator');
+            indicator.textContent = `当前回合：${currentPlayer === 0 ? '红方' : '蓝方'}`;
+            indicator.style.color = currentPlayer === 0 ? '#ff4444' : '#4444ff';
+        }
+    </script>
+</body>
+</html>
